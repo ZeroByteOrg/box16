@@ -25,6 +25,7 @@ public:
 		if (m_timing_error == 0) {
 			ym0 = ym1;
 			m_chip.generate(&ym1, 1);
+			clock_timers();
 		}
 
 		auto lerp = [](double v0, double v1, double x, double x1) -> double {
@@ -45,8 +46,8 @@ public:
 				while (m_timing_error >= buffer_sample_rate) {
 					ym0 = ym1;
 					m_chip.generate(&ym1, 1);
-
 					m_timing_error -= buffer_sample_rate;
+					clock_timers();
 				}
 			}
 			m_last_output[0] = ym0;
@@ -58,6 +59,7 @@ public:
 					ym0 = ym1;
 					m_chip.generate(&ym1, 1);
 					m_timing_error -= m_chip_sample_rate;
+					clock_timers();
 				}
 				*stream = (int16_t)lerp(ym0.data[0], ym1.data[1], m_timing_error, m_chip_sample_rate);
 				++stream;
@@ -68,6 +70,7 @@ public:
 				m_chip.generate(&ym1, 1);
 
 				m_timing_error += incremental_error;
+				clock_timers();
 			}
 			m_last_output[0] = ym0;
 			m_last_output[1] = ym1;
@@ -83,6 +86,42 @@ public:
 	void reset()
 	{
 		m_chip.reset();
+		m_timer[0] = -1;
+		m_timer[1] = -1;
+	}
+	
+	// ymfm calls this callback whenever a timer is activated or stopped.
+	void ymfm_set_timer(uint32_t tnum, int32_t duration_in_clocks) override
+	{
+		// duration_in_clocks is -1 if a timer is stopped
+		
+		// TODO: implement clocks.
+		m_timer[tnum] = duration_in_clocks;
+	}
+	
+	// ymfm calls this callback whenever the IRQ line changes state.
+	void ymfm_update_irq(bool asserted) override
+	{
+		printf("The YM IRQ changed state to %s\n",asserted ? "on" : "off");
+	}
+
+	// ymfm calls this callback whenever the chip asserts the busy flag.
+	virtual void ymfm_set_busy_end(uint32_t clocks) override
+	{
+		// Seems to always be passed the value 64. Not sure if anything
+		// more cycle-exact would ever yield any different value. Not sure
+		// if real chip is ALWAYS 64-cycles or if it varies based on when
+		// during the internal cycle a write takes place. Only some
+		// very detailed experimentation with the real chip would answer that
+	}
+	
+	// ymfm checks this before committing any writes. 
+	virtual bool ymfm_is_busy() override
+	{
+		// overriding to make it visible to the project
+		// will need to track YM clock cycles externally.
+		// printf ("ymfm checked the busy flag\n");
+		return false;
 	}
 
 	void debug_write(uint8_t addr, uint8_t value)
@@ -150,6 +189,22 @@ public:
 		// it's the interface (aka this class)'s responsibility to emulate them
 		return 0;
 	}
+private:
+	inline void clock_timers()
+	{
+		for (uint8_t i = 0 ; i<2 ; i++ )
+		{
+			if (m_timer[i] > 0)
+			{
+				m_timer[i] -= 64;
+				if (m_timer[i] < 1)
+				{
+					m_timer[i] = -1;
+					m_engine->engine_timer_expired(i);
+				}
+			}
+		}
+	}
 
 private:
 	ymfm::ym2151              m_chip;
@@ -157,6 +212,7 @@ private:
 
 	uint32_t m_timing_error;
 	uint32_t m_chip_sample_rate;
+	int16_t  m_timer[2] = { 0, 0 };
 };
 
 static ym2151_interface Ym_interface;
